@@ -1,27 +1,33 @@
 #!/usr/bin/env python3
 """
-从会话历史JSON中提取"开庭"前的上下文。
-用法: echo '{"messages": [...]}' | python3 extract_context.py
+从 sessions_list 返回的 JSON 中提取"开庭"前的上下文。
+用法: echo 'sessions_list 返回的完整 JSON' | python3 extract_context.py
 """
 import json
 import re
 import sys
 
-# 触发词（统一管理，三处同步）
+# 触发词（统一管理）
 TRIGGER_PATTERN = re.compile(r"开庭|开一下庭|开庭审理|给我开", re.IGNORECASE)
 
-# 负面情绪词（用于推断触发原因）
+# 负面情绪词
 NEGATIVE_WORDS = [
     "不对", "不是", "错了", "敷衍", "没用", "不行",
-    "垃圾", "烂", "有问题", "为什么", "怎么", "不是"
+    "垃圾", "烂", "有问题", "为什么", "怎么"
 ]
 
 
 def extract_trigger_idx(messages):
     """找到触发词消息的索引"""
     for i in range(len(messages) - 1, -1, -1):
-        content = messages[i].get("content", "") or ""
-        if TRIGGER_PATTERN.search(content):
+        content = messages[i].get("content", "")
+        if isinstance(content, list):
+            # content可能是 [{"type": "text", "text": "..."}] 格式
+            content = " ".join(
+                item.get("text", "") for item in content
+                if isinstance(item, dict) and item.get("type") == "text"
+            )
+        if TRIGGER_PATTERN.search(str(content)):
             return i
     return -1
 
@@ -31,30 +37,34 @@ def extract_context(messages):
     trigger_idx = extract_trigger_idx(messages)
 
     if trigger_idx <= 0:
-        # 触发词在第一条或找不到，取最近6条
         slice_start = max(0, len(messages) - 6)
         return messages[slice_start:]
 
-    # 取触发词前的所有消息（保留原始顺序）
     return messages[:trigger_idx]
 
 
 def build_conversation_with_roles(before_msgs, max_len=800):
     """
     合并消息列表，标注role，保留原始时序。
-    每条消息不超过max_len，过长截断并标记。
     """
     lines = []
     truncated = False
     for m in before_msgs:
         role = m.get("role", "unknown")
-        content = m.get("content", "") or ""
+        content = m.get("content", "")
 
-        is_ai = role == "assistant"
-        prefix = "🤖AI" if is_ai else "👤用户"
+        # 处理 content 为列表格式（如 [{"type":"text","text":"..."}]）
+        if isinstance(content, list):
+            content = " ".join(
+                item.get("text", "") for item in content
+                if isinstance(item, dict) and item.get("type") == "text"
+            )
+        content = str(content) if content else ""
 
-        tag = "truncated" if len(content) > max_len else None
-        if tag:
+        prefix = "🤖AI" if role == "assistant" else "👤用户"
+
+        tag = ""
+        if len(content) > max_len:
             content = content[:max_len] + "...[截断]"
             truncated = True
 
@@ -65,28 +75,37 @@ def build_conversation_with_roles(before_msgs, max_len=800):
 
 def infer_trigger_reason(trigger_msg, before_msgs):
     """推断触发原因"""
-    trigger_content = (trigger_msg.get("content", "") or "") if trigger_msg else ""
+    content = trigger_msg.get("content", "") if trigger_msg else ""
+    if isinstance(content, list):
+        content = " ".join(
+            item.get("text", "") for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
+    trigger_content = str(content)
 
-    # 检查触发消息本身是否包含负面词
     for neg in NEGATIVE_WORDS:
         if neg in trigger_content:
             return f"用户表达不满（关键词：{neg}）：{trigger_content[:100]}"
 
-    # 检查历史消息中的AI回答是否有敷衍特征
-   敷衍_patterns = ["做不到", "无法", "不确定", "可能", "应该", "大概"]
+    敷衍_patterns = ["做不到", "无法", "不确定", "可能", "应该", "大概"]
     for m in before_msgs:
         if m.get("role") == "assistant":
-            content = m.get("content", "") or ""
+            c = m.get("content", "")
+            if isinstance(c, list):
+                c = " ".join(item.get("text","") for item in c if isinstance(item, dict))
+            c = str(c)
             for p in 敷衍_patterns:
-                if p in content:
-                    return f"AI回答含敷衍特征（检测到：{p}）：{content[:100]}"
+                if p in c:
+                    return f"AI回答含敷衍特征（检测到：{p}）：{c[:100]}"
 
-    # 找用户最后一条有意义的消息作为触发原因
     for m in reversed(before_msgs):
         if m.get("role") in ("user", "human"):
-            content = m.get("content", "") or ""
-            if len(content) > 10:
-                return content[:150]
+            c = m.get("content", "")
+            if isinstance(c, list):
+                c = " ".join(item.get("text","") for item in c if isinstance(item, dict))
+            c = str(c)
+            if len(c) > 10:
+                return c[:150]
 
     return "用户主观不满，未明确原因"
 
@@ -98,34 +117,48 @@ if __name__ == "__main__":
         print(json.dumps({"error": f"JSON解析失败: {e}"}))
         sys.exit(1)
 
-    messages = data.get("messages", [])
+    # sessions_list 返回格式：{"sessions": [{"messages": [...]}, ...]}
+    # 第一个 session 即当前 session
+    sessions = data.get("sessions", [])
+    if not sessions:
+        print(json.dumps({"error": "sessions_list 返回为空，无法获取上下文"}))
+        sys.exit(1)
+
+    messages = sessions[0].get("messages", [])
+    if not messages:
+        print(json.dumps({"error": "当前 session 无消息历史"}))
+        sys.exit(1)
+
     trigger_idx = extract_trigger_idx(messages)
 
-    # 触发词消息
     trigger_msg = None
     if trigger_idx >= 0:
         trigger_msg = messages[trigger_idx]
 
-    # 提取上下文
     before = extract_context(messages)
 
-    # 分类
     ai_msgs = []
     user_msgs = []
     for m in before:
         role = m.get("role", "")
-        content = (m.get("content", "") or "")[:800]  # 保留800字符
+        content = m.get("content", "")
+        if isinstance(content, list):
+            content = " ".join(
+                item.get("text", "") for item in content
+                if isinstance(item, dict) and item.get("type") == "text"
+            )
+        content = str(content)[:800]
+
         if role == "assistant":
             ai_msgs.append(content)
         elif role in ("user", "human"):
             user_msgs.append(content)
 
-    # 合并时序输出（核心修复）
     conversation_with_roles, was_truncated = build_conversation_with_roles(before)
 
     result = {
         "trigger_reason": infer_trigger_reason(trigger_msg, before),
-        "conversation_with_roles": conversation_with_roles,  # 保留时序 + role标注
+        "conversation_with_roles": conversation_with_roles,
         "ai_messages": ai_msgs,
         "user_messages": user_msgs,
         "before_count": len(before),
