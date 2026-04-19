@@ -4,6 +4,16 @@
 
 ---
 
+## 🚀 一句话安装
+
+对 OpenClaw 说：
+
+> 阅读 https://raw.githubusercontent.com/hoviwang/kaiting/main/SKILL.md 并安装这个技能
+
+然后说「开庭」即可使用。
+
+---
+
 ## 中文
 
 ### 😤 受够了 AI 的敷衍？
