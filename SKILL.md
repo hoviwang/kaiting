@@ -1,13 +1,13 @@
 ---
 name: 开庭
 description: 杠精评审技能。当用户说「开庭」（含变体），主会话提取上下文后触发sub-agent，以杠精人格审查AI刚才的回答，揪出偷懒/敷衍/单渠道等问题，逼AI多渠道查证、检讨、并给出更多解决方案。
-version: 2.1.0
+version: 2.2.0
 author: hoviwang
 tags: [productivity, debugging, self-improvement]
 trigger: 开庭|开一下庭|开庭审理|给我开
 ---
 
-# ai-critic — 杠精评审 v2.1
+# ai-critic — 杠精评审 v2.2
 
 ## 😤 受够了 AI 的敷衍？
 
@@ -47,7 +47,10 @@ ls ~/.openclaw/skills/开庭.skill/
   ↓
 主agent 运行 extract_context.py 提取上下文
   ↓
-主agent 启动 sub-agent（杠精人格 + 工具集）
+  ├── 能拿到 → 正常流程：启动 sub-agent 挑刺
+  └── 拿不到 → 询问用户「刚才发生了什么？」
+      → 用户口述问题
+      → 直接启动 sub-agent 挑刺用户描述的场景
   ↓
 sub-agent 三步输出：【挑刺】→【追问】→【示范】
   ↓
@@ -64,13 +67,11 @@ sub-agent 三步输出：【挑刺】→【追问】→【示范】
 
 ### 步骤1：获取会话消息
 
-调用 `sessions_list`，传入当前 session 的 key，获取消息历史：
+调用 `sessions_list`，获取当前 session 的消息历史：
 
 ```
-sessions_list，sessionKey=<当前sessionKey>，limit=10，messageLimit=20
+sessions_list，limit=5，messageLimit=30
 ```
-
-结果 JSON 传给 extract_context.py。
 
 ### 步骤2：提取上下文
 
@@ -80,33 +81,32 @@ python3 ~/.openclaw/skills/开庭.skill/extract_context.py << 'EOF'
 EOF
 ```
 
-脚本输出：
-- `trigger_reason`：触发原因
-- `conversation_with_roles`：保留时序的对话（含role标注）
-- `ai_messages`：AI 刚才的回答
-- `user_messages`：用户之前的消息
-- `before_count`：上下文消息条数
+### 步骤3：判断结果
 
-### 步骤3：检查提取结果
+**如果 `fallback: false`**（正常拿到上下文）：
+→ 继续步骤4
 
-如果脚本返回 `{"error": "..."}`：
-→ 直接向用户展示错误，并用**人工方式**继续开庭流程：
-  - 让用户描述「刚才AI哪个回答有问题」
-  - 人工启动 sub-agent 挑刺
+**如果 `fallback: true`**（拿不到上下文）：
+→ 直接问用户：「刚才发生了什么？AI哪个回答有问题？」
+→ 拿到用户回复后，跳到步骤5，直接用用户描述的场景启动 sub-agent
 
-### 步骤4：启动 sub-agent
+### 步骤4：启动 sub-agent（有上下文时）
 
-使用 `sessions_spawn`，传递上下文，配置工具集：
+使用 `sessions_spawn`，传递 extract_context.py 的输出结果。
 
+### 步骤5：启动 sub-agent（无上下文 / 用户口述时）
+
+用户描述「刚才AI哪里有问题」之后，直接用那段描述作为上下文，启动 sub-agent：
+
+prompt 示例：
 ```
-web_search, minimax__web_search, memory_search, sessions_history
+用户反映：「（用户口述的问题描述）」
+
+请作为杠精评审，对AI的回答进行挑刺。
+输出【挑刺】【追问】【示范】三部分。
 ```
 
-sub-agent 必须完成三部分：**挑刺 → 追问 → 示范**
-
-### 步骤5：展示结果，**询问用户确认**
-
-展示 sub-agent 输出，**必须询问用户确认**：
+### 步骤6：展示结果，询问用户确认
 
 ```
 【开庭结果】
@@ -128,15 +128,6 @@ sub-agent 必须完成三部分：**挑刺 → 追问 → 示范**
   → 方向偏了：换一个角度重新挑刺
   → 不够狠：重新挑刺，语气更冲
 ```
-
-### 步骤6：等用户确认后执行
-
-| 用户选择 | 主agent动作 |
-|---------|-------------|
-| 继续深挖 | 按追问方向实际查证，查完再展示，再问确认 |
-| 够了，进检讨 | 输出强制检讨格式 |
-| 方向偏了 | 重新调用 sub-agent |
-| 不够狠 | 重新调用 sub-agent，语气升级 |
 
 ### 步骤7：强制检讨格式
 
@@ -186,7 +177,7 @@ sub-agent 必须完成三部分：**挑刺 → 追问 → 示范**
 ```
 ~/.openclaw/skills/开庭.skill/
 ├── SKILL.md              # 本文件
-├── README.md             # 完整使用说明（中英双语）
+├── README.md             # 完整使用说明
 ├── extract_context.py    # 上下文提取脚本
 └── references/
     └── subagent-prompt.md # sub-agent 完整指令
