@@ -1,13 +1,13 @@
 ---
 name: 开庭
 description: 杠精评审技能。当用户说「开庭」（含变体），主会话提取上下文后触发sub-agent，以杠精人格审查AI刚才的回答，揪出偷懒/敷衍/单渠道等问题，逼AI多渠道查证、检讨、并给出更多解决方案。
-version: 2.0.0
+version: 2.1.0
 author: hoviwang
 tags: [productivity, debugging, self-improvement]
 trigger: 开庭|开一下庭|开庭审理|给我开
 ---
 
-# ai-critic — 杠精评审 v2
+# ai-critic — 杠精评审 v2.1
 
 ## 😤 受够了 AI 的敷衍？
 
@@ -22,22 +22,11 @@ trigger: 开庭|开一下庭|开庭审理|给我开
 当用户说「阅读本文件并安装」，AI 必须执行以下命令：
 
 ```bash
-# 1. 创建技能目录
 mkdir -p ~/.openclaw/skills/开庭.skill
-
-# 2. 克隆仓库到临时目录
 git clone https://github.com/hoviwang/kaiting.git /tmp/kaiting-repo
-
-# 3. 复制所有文件到技能目录
 cp -r /tmp/kaiting-repo/. ~/.openclaw/skills/开庭.skill/
-
-# 4. 设置执行权限
 chmod +x ~/.openclaw/skills/开庭.skill/extract_context.py
-
-# 5. 清理临时目录
 rm -rf /tmp/kaiting-repo
-
-# 6. 验证安装
 ls ~/.openclaw/skills/开庭.skill/
 ```
 
@@ -53,6 +42,8 @@ ls ~/.openclaw/skills/开庭.skill/
 
 ```
 用户说"开庭"
+  ↓
+主agent 调用 sessions_list 获取当前会话消息
   ↓
 主agent 运行 extract_context.py 提取上下文
   ↓
@@ -71,14 +62,21 @@ sub-agent 三步输出：【挑刺】→【追问】→【示范】
 
 ## 主agent执行步骤
 
-### 步骤1：提取上下文
+### 步骤1：获取会话消息
 
-1. 用 `sessions_history` 工具获取当前会话最近 30 条消息
-2. 将结果 JSON 传给提取脚本：
+调用 `sessions_list`，传入当前 session 的 key，获取消息历史：
+
+```
+sessions_list，sessionKey=<当前sessionKey>，limit=10，messageLimit=20
+```
+
+结果 JSON 传给 extract_context.py。
+
+### 步骤2：提取上下文
 
 ```bash
 python3 ~/.openclaw/skills/开庭.skill/extract_context.py << 'EOF'
-<paste sessions_history 返回的 JSON>
+<sessions_list 返回的完整 JSON>
 EOF
 ```
 
@@ -87,8 +85,16 @@ EOF
 - `conversation_with_roles`：保留时序的对话（含role标注）
 - `ai_messages`：AI 刚才的回答
 - `user_messages`：用户之前的消息
+- `before_count`：上下文消息条数
 
-### 步骤2：启动 sub-agent
+### 步骤3：检查提取结果
+
+如果脚本返回 `{"error": "..."}`：
+→ 直接向用户展示错误，并用**人工方式**继续开庭流程：
+  - 让用户描述「刚才AI哪个回答有问题」
+  - 人工启动 sub-agent 挑刺
+
+### 步骤4：启动 sub-agent
 
 使用 `sessions_spawn`，传递上下文，配置工具集：
 
@@ -98,7 +104,7 @@ web_search, minimax__web_search, memory_search, sessions_history
 
 sub-agent 必须完成三部分：**挑刺 → 追问 → 示范**
 
-### 步骤3：展示结果，**询问用户确认**
+### 步骤5：展示结果，**询问用户确认**
 
 展示 sub-agent 输出，**必须询问用户确认**：
 
@@ -123,7 +129,7 @@ sub-agent 必须完成三部分：**挑刺 → 追问 → 示范**
   → 不够狠：重新挑刺，语气更冲
 ```
 
-### 步骤4：等用户确认后执行
+### 步骤6：等用户确认后执行
 
 | 用户选择 | 主agent动作 |
 |---------|-------------|
@@ -132,7 +138,7 @@ sub-agent 必须完成三部分：**挑刺 → 追问 → 示范**
 | 方向偏了 | 重新调用 sub-agent |
 | 不够狠 | 重新调用 sub-agent，语气升级 |
 
-### 步骤5：强制检讨格式
+### 步骤7：强制检讨格式
 
 ```
 【检讨】
@@ -144,7 +150,7 @@ sub-agent 必须完成三部分：**挑刺 → 追问 → 示范**
    ③ ...
 ```
 
-### 步骤6：按检讨执行
+### 步骤8：按检讨执行
 
 说完检讨要**真的动手**，不能完就结束。
 
